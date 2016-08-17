@@ -534,106 +534,112 @@ class nusoap_server extends nusoap_base {
 		}
 		$this->debug("in invoke_method, delim=$delim");
 
-		$class = '';
-		$method = '';
-		if (strlen($delim) > 0 && substr_count($this->methodname, $delim) == 1) {
-			$try_class = substr($this->methodname, 0, strpos($this->methodname, $delim));
-			if (class_exists($try_class)) {
-				// get the class and method name
-				$class = $try_class;
-				$method = substr($this->methodname, strpos($this->methodname, $delim) + strlen($delim));
-				$this->debug("in invoke_method, class=$class method=$method delim=$delim");
-			} else {
-				$this->debug("in invoke_method, class=$try_class not found");
-			}
+		$context = $this->operations[$this->methodname]["context"];
+		if ($context) {
+			// If there is a context then completely bypass the confusing default stuff and do a simple method call
+			$this->methodreturn = call_user_func_array([$context, $this->methodname], $this->methodparams);
 		} else {
-			$try_class = '';
-			$this->debug("in invoke_method, no class to try");
-		}
-
-		// does method exist?
-		if ($class == '') {
-			if (!function_exists($this->methodname)) {
-				$this->debug("in invoke_method, function '$this->methodname' not found!");
-				$this->result = 'fault: method not found';
-				$this->fault('SOAP-ENV:Client',"method '$this->methodname'('$orig_methodname') not defined in service('$try_class' '$delim')");
-				return;
-			}
-		} else {
-			$method_to_compare = (substr(phpversion(), 0, 2) == '4.') ? strtolower($method) : $method;
-			if (!in_array($method_to_compare, get_class_methods($class))) {
-				$this->debug("in invoke_method, method '$this->methodname' not found in class '$class'!");
-				$this->result = 'fault: method not found';
-				$this->fault('SOAP-ENV:Client',"method '$this->methodname'/'$method_to_compare'('$orig_methodname') not defined in service/'$class'('$try_class' '$delim')");
-				return;
-			}
-		}
-
-		// evaluate message, getting back parameters
-		// verify that request parameters match the method's signature
-		if(! $this->verify_method($this->methodname,$this->methodparams)){
-			// debug
-			$this->debug('ERROR: request not verified against method signature');
-			$this->result = 'fault: request failed validation against method signature';
-			// return fault
-			$this->fault('SOAP-ENV:Client',"Operation '$this->methodname' not defined in service.");
-			return;
-		}
-
-		// if there are parameters to pass
-		$this->debug('in invoke_method, params:');
-		$this->appendDebug($this->varDump($this->methodparams));
-		$this->debug("in invoke_method, calling '$this->methodname'");
-		if (!function_exists('call_user_func_array')) {
-			if ($class == '') {
-				$this->debug('in invoke_method, calling function using eval()');
-				$funcCall = "\$this->methodreturn = $this->methodname(";
-			} else {
-				if ($delim == '..') {
-					$this->debug('in invoke_method, calling class method using eval()');
-					$funcCall = "\$this->methodreturn = ".$class."::".$method."(";
+			$class = '';
+			$method = '';
+			if (strlen($delim) > 0 && substr_count($this->methodname, $delim) == 1) {
+				$try_class = substr($this->methodname, 0, strpos($this->methodname, $delim));
+				if (class_exists($try_class)) {
+					// get the class and method name
+					$class = $try_class;
+					$method = substr($this->methodname, strpos($this->methodname, $delim) + strlen($delim));
+					$this->debug("in invoke_method, class=$class method=$method delim=$delim");
 				} else {
-					$this->debug('in invoke_method, calling instance method using eval()');
-					// generate unique instance name
-					$instname = "\$inst_".time();
-					$funcCall = $instname." = new ".$class."(); ";
-					$funcCall .= "\$this->methodreturn = ".$instname."->".$method."(";
+					$this->debug("in invoke_method, class=$try_class not found");
 				}
+			} else {
+				$try_class = '';
+				$this->debug("in invoke_method, no class to try");
 			}
-			if ($this->methodparams) {
-				foreach ($this->methodparams as $param) {
-					if (is_array($param) || is_object($param)) {
-						$this->fault('SOAP-ENV:Client', 'NuSOAP does not handle complexType parameters correctly when using eval; call_user_func_array must be available');
-						return;
-					}
-					$funcCall .= "\"$param\",";
-				}
-				$funcCall = substr($funcCall, 0, -1);
-			}
-			$funcCall .= ');';
-			$this->debug('in invoke_method, function call: '.$funcCall);
-			@eval($funcCall);
-		} else {
+
+			// does method exist?
 			if ($class == '') {
-				$this->debug('in invoke_method, calling function using call_user_func_array()');
-				$call_arg = "$this->methodname";	// straight assignment changes $this->methodname to lower case after call_user_func_array()
-			} elseif ($delim == '..') {
-				$this->debug('in invoke_method, calling class method using call_user_func_array()');
-				$call_arg = array ($class, $method);
+				if (!function_exists($this->methodname)) {
+					$this->debug("in invoke_method, function '$this->methodname' not found!");
+					$this->result = 'fault: method not found';
+					$this->fault('SOAP-ENV:Client', "method '$this->methodname'('$orig_methodname') not defined in service('$try_class' '$delim')");
+					return;
+				}
 			} else {
-				$this->debug('in invoke_method, calling instance method using call_user_func_array()');
-				$instance = new $class ();
-				$call_arg = array(&$instance, $method);
+				$method_to_compare = (substr(phpversion(), 0, 2) == '4.') ? strtolower($method) : $method;
+				if (!in_array($method_to_compare, get_class_methods($class))) {
+					$this->debug("in invoke_method, method '$this->methodname' not found in class '$class'!");
+					$this->result = 'fault: method not found';
+					$this->fault('SOAP-ENV:Client', "method '$this->methodname'/'$method_to_compare'('$orig_methodname') not defined in service/'$class'('$try_class' '$delim')");
+					return;
+				}
 			}
-			if (is_array($this->methodparams)) {
-				$this->methodreturn = call_user_func_array($call_arg, array_values($this->methodparams));
+
+			// evaluate message, getting back parameters
+			// verify that request parameters match the method's signature
+			if (!$this->verify_method($this->methodname, $this->methodparams)) {
+				// debug
+				$this->debug('ERROR: request not verified against method signature');
+				$this->result = 'fault: request failed validation against method signature';
+				// return fault
+				$this->fault('SOAP-ENV:Client', "Operation '$this->methodname' not defined in service.");
+				return;
+			}
+
+			// if there are parameters to pass
+			$this->debug('in invoke_method, params:');
+			$this->appendDebug($this->varDump($this->methodparams));
+			$this->debug("in invoke_method, calling '$this->methodname'");
+			if (!function_exists('call_user_func_array')) {
+				if ($class == '') {
+					$this->debug('in invoke_method, calling function using eval()');
+					$funcCall = "\$this->methodreturn = $this->methodname(";
+				} else {
+					if ($delim == '..') {
+						$this->debug('in invoke_method, calling class method using eval()');
+						$funcCall = "\$this->methodreturn = " . $class . "::" . $method . "(";
+					} else {
+						$this->debug('in invoke_method, calling instance method using eval()');
+						// generate unique instance name
+						$instname = "\$inst_" . time();
+						$funcCall = $instname . " = new " . $class . "(); ";
+						$funcCall .= "\$this->methodreturn = " . $instname . "->" . $method . "(";
+					}
+				}
+				if ($this->methodparams) {
+					foreach ($this->methodparams as $param) {
+						if (is_array($param) || is_object($param)) {
+							$this->fault('SOAP-ENV:Client', 'NuSOAP does not handle complexType parameters correctly when using eval; call_user_func_array must be available');
+							return;
+						}
+						$funcCall .= "\"$param\",";
+					}
+					$funcCall = substr($funcCall, 0, -1);
+				}
+				$funcCall .= ');';
+				$this->debug('in invoke_method, function call: ' . $funcCall);
+				@eval($funcCall);
 			} else {
-				$this->methodreturn = call_user_func_array($call_arg, array());
+				if ($class == '') {
+					$this->debug('in invoke_method, calling function using call_user_func_array()');
+					$call_arg = "$this->methodname";    // straight assignment changes $this->methodname to lower case after call_user_func_array()
+				} elseif ($delim == '..') {
+					$this->debug('in invoke_method, calling class method using call_user_func_array()');
+					$call_arg = array($class, $method);
+				} else {
+					$this->debug('in invoke_method, calling instance method using call_user_func_array()');
+					$instance = new $class ();
+					$call_arg = array(&$instance, $method);
+				}
+				if (is_array($this->methodparams)) {
+					$this->methodreturn = call_user_func_array($call_arg, array_values($this->methodparams));
+				} else {
+					$this->methodreturn = call_user_func_array($call_arg, array());
+				}
 			}
+			$this->debug('in invoke_method, methodreturn:');
+			$this->appendDebug($this->varDump($this->methodreturn));
+			$this->debug("in invoke_method, called method $this->methodname, received data of type " . gettype($this->methodreturn));
 		}
-        $this->debug('in invoke_method, methodreturn:');
-        $this->appendDebug($this->varDump($this->methodreturn));
-		$this->debug("in invoke_method, called method $this->methodname, received data of type ".gettype($this->methodreturn));
 	}
 
 	/**
@@ -735,6 +741,7 @@ class nusoap_server extends nusoap_base {
 			$this->responseSOAP = $this->serializeEnvelope($payload,$this->responseHeaders);
 		}
 		$this->debug("Leaving serialize_return");
+
 	}
 
 	/**
@@ -946,7 +953,7 @@ class nusoap_server extends nusoap_base {
 	/**
 	* register a service function with the server
 	*
-	* @param    string $name the name of the PHP function, class.method or class..method
+	* @param    string|array $name the name of the PHP function, class.method or class..method.  This can also be a method on a specific object using [$obj, "methodname"].
 	* @param    array $in assoc array of input values: key = param name, value = param type
 	* @param    array $out assoc array of output values: key = param name, value = param type
 	* @param	mixed $namespace the element namespace for the method or false
@@ -1003,15 +1010,24 @@ class nusoap_server extends nusoap_base {
 			$encodingStyle = 'http://schemas.xmlsoap.org/soap/encoding/';
 		}
 
-		$this->operations[$name] = array(
-	    'name' => $name,
+		if (is_array($name)) {
+			$methodContext = $name[0];
+			$methodName = $name[1];
+		} else {
+			$methodContext = null;
+			$methodName = $name;
+		}
+
+		$this->operations[$methodName] = array(
+	    'name' => $methodName,
+		'context' => $methodContext,
 	    'in' => $in,
 	    'out' => $out,
 	    'namespace' => $namespace,
 	    'soapaction' => $soapaction,
 	    'style' => $style);
         if($this->wsdl){
-        	$this->wsdl->addOperation($name,$in,$out,$namespace,$soapaction,$style,$use,$documentation,$encodingStyle);
+        	$this->wsdl->addOperation($methodName,$in,$out,$namespace,$soapaction,$style,$use,$documentation,$encodingStyle);
 	    }
 		return true;
 	}
